@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>もぐらたたき ローグライク</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #cfeeb0;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    user-select: none;
+    color: #333;
+  }
+  h1 { margin: 8px 0; color: #4a3220; font-size: 1.6rem; }
+  .status {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px 18px;
+    font-size: 1.05rem;
+    margin-bottom: 8px;
+    max-width: 520px;
+    min-height: 1.6em;
+  }
+  .status b { color: #b24a10; }
+  #stageWrap { position: relative; padding: 4px; }
+  #board {
+    display: grid;
+    grid-template-columns: repeat(3, 110px);
+    gap: 14px;
+  }
+  .hole {
+    position: relative;
+    width: 110px;
+    height: 110px;
+    background: #5b3a1e;
+    border-radius: 50%;
+    overflow: hidden;
+    cursor: pointer;
+    box-shadow: inset 0 -10px 0 rgba(0,0,0,.3);
+  }
+  .mole {
+    position: absolute;
+    left: 50%;
+    bottom: -100%;
+    width: 80px;
+    height: 80px;
+    margin-left: -40px;
+    font-size: 60px;
+    line-height: 80px;
+    text-align: center;
+    transition: bottom .12s ease-out;
+  }
+  .hole.up .mole { bottom: 8px; }
+  .hole.ghost .mole { opacity: .55; }
+  .hole.hit { background: #3a9a4a; }
+  .hole.bad { background: #b23a3a; }
+  #legend { margin-top: 8px; max-width: 520px; text-align: center; font-size: .8rem; color: #4a3220; }
+  #upgrades { margin-top: 6px; max-width: 520px; min-height: 1.5em; text-align: center; font-size: .85rem; color: #4a3220; }
+  #message { margin-top: 6px; height: 1.5em; font-size: 1.05rem; color: #4a3220; }
+
+  #panel {
+    position: absolute;
+    inset: 0 -80px;
+    background: rgba(40, 25, 10, .95);
+    color: #fff;
+    border-radius: 12px;
+    padding: 10px;
+    display: flex;
+    overflow-y: auto;
+    z-index: 5;
+  }
+  #panel.hidden { display: none; }
+  .inner {
+    margin: auto;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    text-align: center;
+  }
+  .inner h2 { margin: 0; font-size: 1.25rem; }
+  .inner p { margin: 0; font-size: .85rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; }
+  .card {
+    width: 100%;
+    padding: 6px 8px;
+    border: 2px solid #f5c26b;
+    border-radius: 8px;
+    background: #6b4423;
+    color: #fff;
+    font-size: .85rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .card:hover:not(:disabled) { background: #8a5a2e; }
+  .card:disabled { opacity: .45; cursor: default; }
+  .card small { display: block; color: #ffe2a8; font-size: .75rem; }
+  .btn {
+    padding: 8px 28px;
+    font-size: 1.1rem;
+    border: none;
+    border-radius: 8px;
+    background: #e8752a;
+    color: #fff;
+    cursor: pointer;
+  }
+  .btn:hover { background: #f08a45; }
+</style>
+</head>
+<body>
+  <h1>🔨 もぐらたたき ローグライク</h1>
+  <div class="status">
+    <div>ステージ <b id="stage">1</b></div>
+    <div>スコア <b id="score">0</b> / <b id="target">0</b></div>
+    <div>残り <b id="time">0</b>秒</div>
+    <div>コンボ <b id="combo">0</b></div>
+    <div>🛡️ <b id="shield">0</b></div>
+    <div>🍀 <b id="lucky">0</b></div>
+    <div>💎 <b id="gems">0</b></div>
+    <div>状況: <b id="mod">-</b></div>
+  </div>
+  <div id="stageWrap">
+    <div id="board"></div>
+    <div id="panel"></div>
+  </div>
+  <div id="message"></div>
+  <div id="legend">
+    🐹1倍 / 🌟4倍 / 👻3倍(すぐ消える) / 🐻3倍(2回たたく) / ⏰時間+ / 💎コイン / 🍀数回2倍 / ⚡全部消す / ⚠️ 💣🐍は避けよう
+  </div>
+  <div id="upgrades"></div>
+
+<script>
+  // ===== もぐらの種類 =====
+  const EMOJI = {
+    normal: "🐹", gold: "🌟", bomb: "💣", clock: "⏰", gem: "💎",
+    ghost: "👻", bear: "🐻", snake: "🐍", clover: "🍀", bolt: "⚡",
+  };
+  const POINT_MULT = { normal: 1, gold: 4, ghost: 3, clock: 1, gem: 1, clover: 1, bolt: 1 };
+
+  // ===== 強化の定義(ラン中に選ぶ) =====
+  const UPGRADES = {
+    power:   { name: "🔨 強力ハンマー",   max: 5, desc: "もぐら1匹あたりの得点 +1" },
+    time:    { name: "⏱️ 時間延長",       max: 5, desc: "ステージの制限時間 +5秒" },
+    combo:   { name: "🔥 コンボマスター", max: 3, desc: "5コンボごとに追加得点 +1" },
+    gold:    { name: "🌟 黄金の誘い",     max: 4, desc: "黄金もぐらが出やすくなる" },
+    splash:  { name: "💥 範囲ハンマー",   max: 2, desc: "Lv1:上下左右 / Lv2:周囲8マスの良いもぐらも同時に(爆弾等は巻き込まない)" },
+    shield:  { name: "🛡️ 爆弾シールド",   max: 3, desc: "毎ステージ開始時に盾 +1(爆弾・ヘビを防ぐ)" },
+    slow:    { name: "🐢 スロー",         max: 3, desc: "もぐらが長く出ている(+25%)" },
+    crit:    { name: "🎯 クリティカル",   max: 4, desc: "10%の確率で得点2倍(Lvごとに+10%)" },
+    steal:   { name: "⏳ 時間吸収",       max: 3, desc: "10回たたくごとに残り時間 +1秒(Lv分)" },
+    coinUp:  { name: "💰 コイン増加",     max: 5, desc: "ラン終了時のコイン +20%" },
+    clockUp: { name: "🔔 時計の誘い",     max: 3, desc: "⏰が出やすくなる" },
+    gemUp:   { name: "⛏️ 宝探し",         max: 3, desc: "💎が出やすくなる" },
+    glove:   { name: "🧤 厚手の手袋",     max: 2, desc: "爆弾・ヘビのペナルティ -1" },
+    charm:   { name: "🧿 お守り",         max: 3, desc: "コンボが途切れる時、25%で維持(Lvごとに+25%)" },
+    easy:    { name: "🎖️ 目標軽減",       max: 3, desc: "ステージの目標点 -10%" },
+    dash:    { name: "🏃 スタートダッシュ", max: 3, desc: "ステージ開始から3秒間(Lvごとに+3秒)得点2倍" },
+    lightUp: { name: "🌩️ 雷の使い手",     max: 3, desc: "⚡が出やすくなる" },
+    bear:    { name: "🪓 熊ハンター",     max: 2, desc: "Lv1:熊が1回で倒れる / 熊の得点+1倍(Lvごと)" },
+    luck:    { name: "☘️ 四つ葉",         max: 3, desc: "🍀が出やすく、効果の回数 +3" },
+    clockPlus:{ name: "⌚ 時計の力",      max: 3, desc: "⏰で増える時間 +1秒" },
+    mult:    { name: "📈 得点倍率",       max: 4, desc: "最終得点 +20%" },
+  };
+
+  // ===== 永続強化(コインで購入。ゲームオーバー後も残る) =====
+  const META = {
+    power:   { cost: 30, max: 3, label: "初期ハンマー" },
+    time:    { cost: 25, max: 3, label: "初期時間" },
+    shield:  { cost: 40, max: 2, label: "初期シールド" },
+    gold:    { cost: 30, max: 3, label: "初期黄金運" },
+    combo:   { cost: 35, max: 2, label: "初期コンボ" },
+    slow:    { cost: 30, max: 2, label: "初期スロー" },
+    crit:    { cost: 40, max: 3, label: "初期クリティカル" },
+    coinUp:  { cost: 50, max: 3, label: "初期コイン増加" },
+    glove:   { cost: 35, max: 2, label: "初期手袋" },
+    mult:    { cost: 60, max: 2, label: "初期得点倍率" },
+    clockUp: { cost: 30, max: 2, label: "初期時計運" },
+    splash:  { cost: 80, max: 1, label: "初期範囲ハンマー" },
+  };
+
+  // ===== ステージの状況(ランダムで変化) =====
+  const MODS = [
+    { name: "通常",           desc: "特になし",                       bomb: 1,   gold: 0,  speed: 1,    target: 1,    bear: 0,  luck: 0 },
+    { name: "💣 爆弾祭り",    desc: "爆弾が多い(目標は少し楽)",       bomb: 2.5, gold: 0,  speed: 1,    target: 0.85, bear: 0,  luck: 0 },
+    { name: "🌟 黄金ラッシュ", desc: "黄金が多い(目標は少し高い)",     bomb: 1,   gold: 15, speed: 1,    target: 1.1,  bear: 0,  luck: 0 },
+    { name: "⏩ 高速",        desc: "全体が速い(目標も高い)",         bomb: 1,   gold: 0,  speed: 0.7,  target: 1.15, bear: 0,  luck: 0 },
+    { name: "🐻 熊の巣",      desc: "熊がたくさん出る",               bomb: 1,   gold: 0,  speed: 1,    target: 1.1,  bear: 25, luck: 0 },
+    { name: "🍀 幸運の日",    desc: "🍀と💎が出やすい",               bomb: 1,   gold: 0,  speed: 1,    target: 1,    bear: 0,  luck: 10 },
+  ];
+
+  // ===== セーブデータ =====
+  const SAVE_KEY = "moguraRogue.v1";
+  function loadSave() {
+    try {
+      const d = JSON.parse(localStorage.getItem(SAVE_KEY));
+      if (d && d.meta) return d;
+    } catch (e) {}
+    return { coins: 0, best: 0, meta: {} };
+  }
+  function writeSave() {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {}
+  }
+  const save = loadSave();
+
+  // ===== 画面要素 =====
+  const $ = id => document.getElementById(id);
+  const boardEl = $("board"), panel = $("panel"), messageEl = $("message");
+  const holes = [];
+  for (let i = 0; i < 9; i++) {
+    const hole = document.createElement("div");
+    hole.className = "hole";
+    hole.innerHTML = '<div class="mole"></div>';
+    hole.addEventListener("pointerdown", () => whack(i));
+    boardEl.appendChild(hole);
+    holes.push(hole);
+  }
+
+  // ===== ゲーム状態 =====
+  let up = {};
+  let stage = 1, mod = MODS[0];
+  let score = 0, totalScore = 0, combo = 0, shield = 0, lucky = 0, gems = 0;
+  let timeLeft = 0, stageTime = 0, hits = 0;
+  let playing = false;
+  let moles = new Array(9).fill(null);   // {type, hp, timer}
+  let clockId = null, spawnId = null;
+
+  const lv = k => up[k] || 0;
+  const baseTime = () => 20 + 5 * lv("time");
+  const basePts = () => 1 + lv("power");
+  const target = () => {
+    const raw = 6 + (stage - 1) * 4 + Math.floor(stage * stage / 3);
+    return Math.max(3, Math.round(raw * mod.target * (1 - 0.1 * lv("easy"))));
+  };
+
+  function updateHud() {
+    $("stage").textContent = stage;
+    $("score").textContent = score;
+    $("target").textContent = target();
+    $("time").textContent = timeLeft;
+    $("combo").textContent = combo;
+    $("shield").textContent = shield;
+    $("lucky").textContent = lucky;
+    $("gems").textContent = gems;
+    $("mod").textContent = mod.name;
+    const list = Object.keys(up).filter(k => up[k] > 0)
+      .map(k => `${UPGRADES[k].name} Lv${up[k]}`).join(" / ");
+    $("upgrades").textContent = list ? "取得済み: " + list : "";
+  }
+
+  function flash(i, cls) {
+    holes[i].classList.add(cls);
+    setTimeout(() => holes[i].classList.remove(cls), 160);
+  }
+
+  function breakCombo() {
+    if (combo > 0 && Math.random() < 0.25 * lv("charm")) {
+      messageEl.textContent = "🧿 お守りでコンボ維持!";
+    } else {
+      combo = 0;
+    }
+  }
+
+  // ===== もぐらの出現 =====
+  function pickType() {
+    const w = { normal: 100 };
+    w.gold = 8 + 6 * lv("gold") + mod.gold;
+    if (stage >= 2) {
+      w.bomb = Math.min(30, 5 + stage * 2.5) * mod.bomb;
+      w.clock = 4 + 3 * lv("clockUp");
+      w.clover = 3 + 2 * lv("luck") + mod.luck;
+    }
+    w.gem = 4 + 3 * lv("gemUp") + mod.luck;
+    if (stage >= 3) {
+      w.ghost = 6;
+      w.bear = 6 + mod.bear;
+      w.bolt = 2 + 2 * lv("lightUp");
+    }
+    if (stage >= 4) w.snake = 6;
+    const total = Object.values(w).reduce((a, b) => a + b, 0);
+    let r = Math.random() * total;
+    for (const k in w) {
+      r -= w[k];
+      if (r < 0) return k;
+    }
+    return "normal";
+  }
+
+  function spawnMole() {
+    if (!playing) return;
+    const maxAtOnce = Math.min(1 + Math.floor(stage / 2), 4);
+    if (moles.filter(Boolean).length >= maxAtOnce) return;
+    const free = [];
+    moles.forEach((m, i) => { if (!m) free.push(i); });
+    if (!free.length) return;
+    const i = free[Math.floor(Math.random() * free.length)];
+    const type = pickType();
+
+    let stay = Math.max(500, 1400 - stage * 70) * (1 + 0.25 * lv("slow")) * mod.speed;
+    if (type === "ghost") stay *= 0.55;
+    const timer = setTimeout(() => {
+      if (type !== "bomb" && type !== "snake") breakCombo();
+      removeMole(i);
+      updateHud();
+    }, stay);
+    const hp = type === "bear" ? (lv("bear") >= 1 ? 1 : 2) : 1;
+    moles[i] = { type, hp, timer };
+    holes[i].querySelector(".mole").textContent = EMOJI[type];
+    holes[i].classList.toggle("ghost", type === "ghost");
+    holes[i].classList.add("up");
+  }
+
+  function removeMole(i) {
+    if (!moles[i]) return;
+    clearTimeout(moles[i].timer);
+    moles[i] = null;
+    holes[i].classList.remove("up");
+  }
+
+  // ===== たたく処理 =====
+  function neighbors(i) {
+    const r = Math.floor(i / 3), c = i % 3, out = [];
+    const s = lv("splash");
+    if (!s) return out;
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (!dr && !dc) continue;
+        if (s < 2 && dr && dc) continue;
+        const nr = r + dr, nc = c + dc;
+        if (nr >= 0 && nr < 3 && nc >= 0 && nc < 3) out.push(nr * 3 + nc);
+      }
+    }
+    return out;
+  }
+
+  const isBad = t => t === "bomb" || t === "snake";
+
+  function whack(i) {
+    if (!playing) return;
+    const targets = [];
+    if (moles[i]) targets.push(i);
+    neighbors(i).forEach(n => { if (moles[n] && !isBad(moles[n].type)) targets.push(n); });
+    if (!targets.length) {
+      breakCombo();
+      flash(i, "bad");
+      updateHud();
+      return;
+    }
+    targets.forEach(t => hitMole(t, false));
+    updateHud();
+  }
+
+  function hitMole(i, fromBolt) {
+    const m = moles[i];
+    if (!m) return;
+    const t = m.type;
+
+    if (isBad(t)) {
+      removeMole(i);
+      if (fromBolt) { flash(i, "hit"); return; }
+      if (shield > 0) {
+        shield--;
+        messageEl.textContent = "🛡️ 盾が防いだ!";
+        flash(i, "hit");
+        return;
+      }
+      const pen = Math.max(0, (t === "bomb" ? 3 : 2) - lv("glove"));
+      score = Math.max(0, score - pen);
+      combo = 0;
+      messageEl.textContent = `${EMOJI[t]} -${pen}点`;
+      flash(i, "bad");
+      return;
+    }
+
+    if (t === "bear" && !fromBolt) {
+      m.hp--;
+      if (m.hp > 0) {
+        messageEl.textContent = "🐻 あと1回!";
+        flash(i, "hit");
+        return;
+      }
+    }
+
+    removeMole(i);
+    combo++;
+    hits++;
+    const mult = t === "bear" ? 3 + lv("bear") : POINT_MULT[t];
+    let pts = basePts() * mult + lv("combo") * Math.floor(combo / 5);
+    let m2 = 1 + 0.2 * lv("mult");
+    const notes = [];
+    if (lucky > 0) { m2 *= 2; lucky--; notes.push("🍀2倍"); }
+    if (lv("dash") && stageTime - timeLeft < 3 * lv("dash")) { m2 *= 2; notes.push("🏃ダッシュ"); }
+    pts = Math.max(1, Math.round(pts * m2));
+    if (Math.random() < 0.1 * lv("crit")) { pts *= 2; notes.push("🎯クリティカル"); }
+    score += pts;
+
+    if (t === "clock") {
+      const add = 2 + lv("clockPlus");
+      timeLeft += add;
+      notes.push(`⏰+${add}秒`);
+    } else if (t === "gem") {
+      gems++;
+      notes.push("💎ゲット");
+    } else if (t === "clover") {
+      lucky += 5 + 3 * lv("luck");
+      notes.push("🍀運気アップ");
+    } else if (t === "bolt" && !fromBolt) {
+      for (let j = 0; j < 9; j++) if (moles[j]) hitMole(j, true);
+      notes.push("⚡全消し");
+    }
+    if (lv("steal") && hits % 10 === 0) {
+      timeLeft += lv("steal");
+      notes.push(`⏳+${lv("steal")}秒`);
+    }
+    messageEl.textContent = `+${pts}点 ${notes.join(" ")}`;
+    flash(i, "hit");
+  }
+
+  // ===== ステージ進行 =====
+  function startStage() {
+    score = 0;
+    combo = 0;
+    hits = 0;
+    lucky = 0;
+    shield = lv("shield");
+    timeLeft = stageTime = baseTime();
+    playing = true;
+    panel.classList.add("hidden");
+    messageEl.textContent = `ステージ ${stage} 開始!目標 ${target()} 点`;
+    updateHud();
+
+    const interval = Math.max(350, 800 - stage * 40) * mod.speed;
+    spawnMole();
+    spawnId = setInterval(spawnMole, interval);
+    clockId = setInterval(() => {
+      timeLeft--;
+      updateHud();
+      if (timeLeft <= 0) endStage();
+    }, 1000);
+  }
+
+  function stopTimers() {
+    playing = false;
+    clearInterval(clockId);
+    clearInterval(spawnId);
+    for (let i = 0; i < 9; i++) removeMole(i);
+  }
+
+  function endStage() {
+    stopTimers();
+    totalScore += score;
+    if (score >= target()) showUpgradeChoice();
+    else gameOver();
+  }
+
+  // ===== パネル =====
+  function showPanel(html) {
+    panel.innerHTML = `<div class="inner">${html}</div>`;
+    panel.classList.remove("hidden");
+  }
+
+  function showUpgradeChoice() {
+    const pool = Object.keys(UPGRADES).filter(k => lv(k) < UPGRADES[k].max);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const picks = pool.slice(0, 3);
+    let html = `<h2>ステージ ${stage} クリア!</h2><p>${score} 点獲得。強化を1つ選ぼう</p>`;
+    picks.forEach(k => {
+      html += `<button class="card" data-up="${k}">${UPGRADES[k].name} (Lv${lv(k)} → ${lv(k) + 1})<small>${UPGRADES[k].desc}</small></button>`;
+    });
+    if (!picks.length) html += `<p>取れる強化がもうありません!</p><button class="btn" data-next="1">次へ</button>`;
+    showPanel(html);
+    panel.querySelectorAll("[data-up]").forEach(b => b.addEventListener("click", () => {
+      up[b.dataset.up] = lv(b.dataset.up) + 1;
+      nextStage();
+    }));
+    const nb = panel.querySelector("[data-next]");
+    if (nb) nb.addEventListener("click", nextStage);
+  }
+
+  function prepareStage() {
+    mod = stage === 1 ? MODS[0] : MODS[Math.floor(Math.random() * MODS.length)];
+    showPanel(
+      `<h2>ステージ ${stage}</h2>` +
+      `<p>状況: <b>${mod.name}</b>(${mod.desc})</p>` +
+      `<p>目標 ${target()} 点 / ${baseTime()} 秒</p>` +
+      `<button class="btn" id="go">スタート</button>`
+    );
+    $("go").addEventListener("click", startStage);
+    updateHud();
+  }
+
+  function nextStage() {
+    stage++;
+    prepareStage();
+  }
+
+  function gameOver() {
+    const reached = stage;
+    const raw = totalScore + (reached - 1) * 5 + gems * 3;
+    const earned = Math.floor(raw * (1 + 0.2 * lv("coinUp")));
+    save.coins += earned;
+    if (reached > save.best) save.best = reached;
+    writeSave();
+    messageEl.textContent = "";
+    showPanel(
+      `<h2>ゲームオーバー</h2>` +
+      `<p>ステージ ${reached} で力尽きた…(${score} / ${target()} 点)</p>` +
+      `<p>獲得コイン: <b>${earned}</b> 枚(💎 ${gems} 個を含む)</p>` +
+      `<button class="btn" id="toShop">強化ショップへ</button>`
+    );
+    $("toShop").addEventListener("click", showShop);
+  }
+
+  // ===== 永続強化ショップ =====
+  function showShop() {
+    let html = `<h2>🔨 もぐらたたき ローグライク</h2>` +
+      `<p>🪙 コイン: <b>${save.coins}</b> ／ 最高到達: ステージ ${save.best || "-"}</p>` +
+      `<p>コインで永続強化を購入(次回以降のランに引き継がれます)</p><div class="grid">`;
+    Object.keys(META).forEach(k => {
+      const m = META[k], cur = save.meta[k] || 0;
+      const cost = m.cost * (cur + 1);
+      const maxed = cur >= m.max;
+      html += `<button class="card" data-buy="${k}" ${maxed || save.coins < cost ? "disabled" : ""}>` +
+        `${m.label} (Lv${cur}/${m.max})` +
+        `<small>${UPGRADES[k].name.split(" ")[0]} ${maxed ? "最大" : "🪙" + cost}</small></button>`;
+    });
+    html += `</div><button class="btn" id="startRun">ランを開始</button>`;
+    showPanel(html);
+    panel.querySelectorAll("[data-buy]").forEach(b => b.addEventListener("click", () => {
+      const k = b.dataset.buy, cur = save.meta[k] || 0, cost = META[k].cost * (cur + 1);
+      if (cur >= META[k].max || save.coins < cost) return;
+      save.coins -= cost;
+      save.meta[k] = cur + 1;
+      writeSave();
+      showShop();
+    }));
+    $("startRun").addEventListener("click", startRun);
+  }
+
+  function startRun() {
+    up = {};
+    Object.keys(META).forEach(k => { if (save.meta[k]) up[k] = save.meta[k]; });
+    stage = 1;
+    totalScore = 0;
+    gems = 0;
+    messageEl.textContent = "";
+    prepareStage();
+  }
+
+  // ===== 起動 =====
+  showShop();
+  updateHud();
+</script>
+</body>
+</html>
